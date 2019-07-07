@@ -23,6 +23,37 @@ import Reflex.Dom
 
 import Db
 
+completer
+  :: forall t m a b.
+     ( DomBuilder t m
+     , DomBuilderSpace m ~ GhcjsDomSpace
+     , MonadFix m
+     , MonadIO m
+     , MonadIO (Performable m)
+     , MonadHold t m
+     , PostBuild t m
+     , TriggerEvent t m
+     , HasJSContext (Performable m)
+     , PerformEvent t m
+     )
+  => (Event t Text -> m (Event t [a]))
+     -- ^ source of completions
+  -> (Dynamic t a -> m (Event t b))
+     -- ^ render completion
+  -> (b -> Text)
+     -- ^ render text of completion
+  -> m (Dynamic t (Maybe b))
+completer completions renderCompl complText = do
+  rec
+    input <- textInput $ def & textInputConfig_setValue .~ fmap complText setEvent
+    let text = input ^. textInput_value
+    compls <- completions $ ffilter (\t -> T.length t >= 2) $ updated text
+    compls' <- holdDyn [] $ compls
+    setEvents <- el "ul" $ simpleList compls' renderCompl
+    setEvent <- switchHold never $ updated $ fmap leftmost setEvents :: m (Event t b)
+
+  holdDyn Nothing (fmap Just setEvent)
+
 commitCompleter
   :: forall t m.
      ( DomBuilder t m
@@ -37,28 +68,26 @@ commitCompleter
      , PerformEvent t m
      )
   => Dynamic t (Maybe TestEnv)
-  -> m (Dynamic t CommitSha)
+  -> m (Dynamic t (Maybe CommitSha))
 commitCompleter activeTestEnv = do
-  rec
-    commitInput <- textInput $ def & textInputConfig_setValue .~ fmap getCommitSha setEvent
-    let commit = _textInput_value commitInput
-    completionsEv <- fetchCommitsWithPrefix
-                     $ ffilter (\(_,c) -> T.length c >= 2)
-                     $ updated
-                     $ (,) <$> fmap (fromMaybe (TestEnv 0)) activeTestEnv
-                           <*> commit
-    completions <- holdDyn [] $ fmap (fromMaybe (error "error fetching completions")) completionsEv
-    let toEntry :: Dynamic t Commit -> m (Event t CommitSha)
-        toEntry commit = do
-          (e, _) <- el' "li" $ do
-            divClass "" $ dynText $ fmap (getCommitSha . commitSha) commit
-            divClass "" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
-            divClass "" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
-          return $ tag (commitSha <$> current commit) (select (_element_events e) (WrapArg Click))
-    setEvents <- el "ul" $ simpleList completions toEntry
-    setEvent <- switchHold never $ updated $ fmap leftmost setEvents :: m (Event t CommitSha)
+    completer completions renderCompl complText
+  where
+    completions :: Event t Text -> m (Event t [Commit])
+    completions input =
+      fmap (fmap $ fromMaybe $ error "error fetching completions")
+      $ fetchCommitsWithPrefix
+      $ attachWith ((,)) (current $ fmap (fromMaybe (TestEnv 0)) activeTestEnv) input
 
-  holdDyn (CommitSha "") setEvent
+    renderCompl :: Dynamic t Commit -> m (Event t CommitSha)
+    renderCompl commit = do
+      (e, _) <- el' "li" $ do
+        divClass "" $ dynText $ fmap (getCommitSha . commitSha) commit
+        divClass "" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
+        divClass "" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
+      return $ tag (commitSha <$> current commit) (select (_element_events e) (WrapArg Click))
+
+    complText :: CommitSha -> Text
+    complText = getCommitSha
 
 resultsTable
   :: forall t m.
@@ -149,8 +178,9 @@ app = divClass "container" $ do
     activeTestEnv <- _dropdown_value <$> dropdown Nothing (fmap (M.mapKeys Just) testEnvs) def
     commit1 <- commitCompleter activeTestEnv
     commit2 <- commitCompleter activeTestEnv
+    let dummy = fmap $ fromMaybe (CommitSha "")
 
-    resultsTable (fromMaybe (TestEnv 0) <$> activeTestEnv) commit1 commit2
+    resultsTable (fromMaybe (TestEnv 0) <$> activeTestEnv) (dummy commit1) (dummy commit2)
 
   return ()
 
