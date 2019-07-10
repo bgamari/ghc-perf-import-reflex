@@ -21,6 +21,7 @@ import Data.List (elem)
 import Numeric
 import Reflex.Dom
 
+import QueryParams
 import Db
 
 completer
@@ -36,16 +37,18 @@ completer
      , HasJSContext (Performable m)
      , PerformEvent t m
      )
-  => (Event t Text -> m (Event t [a]))
+  => Event t Text
+     -- ^ Event setting initial value
+  -> (Event t Text -> m (Event t [a]))
      -- ^ source of completions
   -> (Dynamic t a -> m (Event t b))
      -- ^ render completion
   -> (b -> Text)
      -- ^ render text of completion
   -> m (Dynamic t (Maybe b))
-completer completions renderCompl complText = do
+completer initial completions renderCompl complText = do
   rec
-    input <- textInput $ def & textInputConfig_setValue .~ fmap complText setEvent
+    input <- textInput $ def & textInputConfig_setValue .~ leftmost [fmap complText setEvent, initial]
     let text = input ^. textInput_value
     compls <- completions $ ffilter (\t -> T.length t >= 2) $ updated text
     compls' <- holdDyn [] $ compls
@@ -67,10 +70,12 @@ commitCompleter
      , HasJSContext (Performable m)
      , PerformEvent t m
      )
-  => Dynamic t (Maybe TestEnv)
+  => Event t Text
+  -> Dynamic t (Maybe TestEnv)
   -> m (Dynamic t (Maybe CommitSha))
-commitCompleter activeTestEnv = do
-    completer completions renderCompl complText
+commitCompleter initial activeTestEnv = do
+  divClass "completer" $
+    completer initial completions renderCompl complText
   where
     completions :: Event t Text -> m (Event t [Commit])
     completions input =
@@ -81,9 +86,11 @@ commitCompleter activeTestEnv = do
     renderCompl :: Dynamic t Commit -> m (Event t CommitSha)
     renderCompl commit = do
       (e, _) <- el' "li" $ do
-        divClass "" $ dynText $ fmap (getCommitSha . commitSha) commit
-        divClass "" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
-        divClass "" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
+        elClass "span" "result-count" $ dynText
+          $ fmap ((<> " results") . tshow . commitResultsCount) commit
+        elClass "span" "commit-sha" $ dynText $ fmap (getCommitSha . commitSha) commit
+        elClass "span" "commit-date" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
+        divClass "commit-title" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
       return $ tag (commitSha <$> current commit) (select (_element_events e) (WrapArg Click))
 
     complText :: CommitSha -> Text
@@ -169,20 +176,35 @@ app
   => m ()
 app = divClass "container" $ do
   elClass "h1" "title" $ text "GHC Performance Statistics Browser"
-  rec
-    onLoadEvent <- button "hi"
-    testEnvs <- do
-      getTestEnvs onLoadEvent >>=
-        holdDyn mempty . fmap (fromMaybe (error "error fetching test environments"))
-      :: m (Dynamic t (M.Map TestEnv Text))
-    activeTestEnv <- _dropdown_value <$> dropdown Nothing (fmap (M.mapKeys Just) testEnvs) def
-    commit1 <- commitCompleter activeTestEnv
-    commit2 <- commitCompleter activeTestEnv
-    let dummy = fmap $ fromMaybe (CommitSha "")
+  queryParams <- queryParamsEvent
+  let getInitialField :: Text -> Text -> Event t Text
+      getInitialField def k = fmap (fromMaybe def . lookup k) queryParams
 
+  rec
+    onLoadEvent <- getPostBuild
+    (activeTestEnv, commit1, commit2) <- elClass "section" "section" $ do
+      testEnvs <- do
+        getTestEnvs onLoadEvent >>=
+          holdDyn mempty . fmap (fromMaybe (error "error fetching test environments"))
+        :: m (Dynamic t (M.Map TestEnv Text))
+      let initialTestEnv = fmap (fmap (TestEnv . read . T.unpack) . lookup "test_env") queryParams
+      activeTestEnv <- labelledField "Test environment" $ do
+        _dropdown_value <$> dropdown Nothing (fmap (M.mapKeys Just) testEnvs) def{ _dropdownConfig_setValue = initialTestEnv }
+
+      commit1 <- labelledField "Commit 1" $ commitCompleter (getInitialField "" "commit1") activeTestEnv
+      commit2 <- labelledField "Commit 2" $ commitCompleter (getInitialField "" "commit2") activeTestEnv
+      return (activeTestEnv, commit1, commit2)
+
+    let dummy = fmap $ fromMaybe (CommitSha "")
     resultsTable (fromMaybe (TestEnv 0) <$> activeTestEnv) (dummy commit1) (dummy commit2)
 
   return ()
+
+labelledField :: (DomBuilder t m) => Text -> m a -> m a
+labelledField label field =
+  elClass "field" "field" $ do
+    elClass "label" "label" $ text label
+    divClass "control" field
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
