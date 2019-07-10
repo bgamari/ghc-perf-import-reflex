@@ -39,7 +39,7 @@ completer
      )
   => Event t Text
      -- ^ Event setting initial value
-  -> (Event t Text -> m (Event t [a]))
+  -> (Dynamic t Text -> m (Event t [a]))
      -- ^ source of completions
   -> (Dynamic t a -> m (Event t b))
      -- ^ render completion
@@ -50,7 +50,7 @@ completer initial completions renderCompl complText = do
   rec
     input <- textInput $ def & textInputConfig_setValue .~ leftmost [fmap complText setEvent, initial]
     let text = input ^. textInput_value
-    compls <- completions $ ffilter (\t -> T.length t >= 2) $ updated text
+    compls <- completions text
     compls' <- holdDyn [] $ compls
     setEvents <- el "ul" $ simpleList compls' renderCompl
     setEvent <- switchHold never $ updated $ fmap leftmost setEvents :: m (Event t b)
@@ -77,11 +77,13 @@ commitCompleter initial activeTestEnv = do
   divClass "completer" $
     completer initial completions renderCompl complText
   where
-    completions :: Event t Text -> m (Event t [Commit])
+    completions :: Dynamic t Text -> m (Event t [Commit])
     completions input =
       fmap (fmap $ fromMaybe $ error "error fetching completions")
       $ fetchCommitsWithPrefix
-      $ attachWith ((,)) (current $ fmap (fromMaybe (TestEnv 0)) activeTestEnv) input
+      $ ffilter (\(_, t) -> T.length t >= 1)
+      $ updated
+      $ ((,) <$> fmap (fromMaybe (TestEnv 0)) activeTestEnv <*> input)
 
     renderCompl :: Dynamic t Commit -> m (Event t CommitSha)
     renderCompl commit = do
