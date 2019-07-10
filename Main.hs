@@ -41,7 +41,7 @@ completer
      -- ^ Event setting initial value
   -> (Dynamic t Text -> m (Event t [a]))
      -- ^ source of completions
-  -> (Dynamic t a -> m (Event t b))
+  -> (Dynamic t a -> m (Dynamic t b))
      -- ^ render completion
   -> (b -> Text)
      -- ^ render text of completion
@@ -52,10 +52,24 @@ completer initial completions renderCompl complText = do
     let text = input ^. textInput_value
     compls <- completions text
     compls' <- holdDyn [] $ compls
-    setEvents <- el "ul" $ simpleList compls' renderCompl
-    setEvent <- switchHold never $ updated $ fmap leftmost setEvents :: m (Event t b)
+    let renderComplItem :: Dynamic t a -> m (Event t b, Dynamic t b)
+        renderComplItem x = do
+          (e, y) <- el' "li" $ renderCompl x
+          let clickEv = tag (current y) (select (_element_events e) (WrapArg Click))
+          return (clickEv, y)
+    setEvents <- el "ul" $ simpleList compls' renderComplItem
+        :: m (Dynamic t [(Event t b, Dynamic t b)])
+    -- Fire setEvent when there is only one completion left
+    let single :: Event t b
+        single = switchDyn $ fmap isSingle setEvents
+          where
+            isSingle :: [(Event t b, Dynamic t b)] -> Event t b
+            isSingle [(_,y)] = updated y
+            isSingle _       = never
+    setEvent <- switchHold never $ updated (fmap (leftmost . map fst) setEvents)
+      :: m (Event t b)
 
-  holdDyn Nothing (fmap Just setEvent)
+  holdDyn Nothing (fmap Just $ leftmost [setEvent, single])
 
 commitCompleter
   :: forall t m.
@@ -85,15 +99,14 @@ commitCompleter initial activeTestEnv = do
       $ updated
       $ ((,) <$> fmap (fromMaybe (TestEnv 0)) activeTestEnv <*> input)
 
-    renderCompl :: Dynamic t Commit -> m (Event t CommitSha)
+    renderCompl :: Dynamic t Commit -> m (Dynamic t CommitSha)
     renderCompl commit = do
-      (e, _) <- el' "li" $ do
-        elClass "span" "result-count" $ dynText
-          $ fmap ((<> " results") . tshow . commitResultsCount) commit
-        elClass "span" "commit-sha" $ dynText $ fmap (getCommitSha . commitSha) commit
-        elClass "span" "commit-date" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
-        divClass "commit-title" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
-      return $ tag (commitSha <$> current commit) (select (_element_events e) (WrapArg Click))
+      elClass "span" "result-count" $ dynText
+        $ fmap ((<> " results") . tshow . commitResultsCount) commit
+      elClass "span" "commit-sha" $ dynText $ fmap (getCommitSha . commitSha) commit
+      elClass "span" "commit-date" $ dynText $ fmap (fromMaybe "the past" . commitDate) commit
+      divClass "commit-title" $ dynText $ fmap (fromMaybe "commit title unavailable" . commitTitle) commit
+      return (commitSha <$> commit)
 
     complText :: CommitSha -> Text
     complText = getCommitSha
