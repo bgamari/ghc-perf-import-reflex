@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 
 executable web-reflex
   main-is:             Main.hs
-  other-modules:       Db
+  other-modules:       Db, Compare
   other-extensions:    FlexibleContexts, OverloadedStrings, RecursiveDo, LambdaCase, ScopedTypeVariables, ConstraintKinds, GeneralizedNewtypeDeriving
   build-depends:       base >=4.11 && <4.13,
                        text >=1.2 && <1.3,
