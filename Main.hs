@@ -8,6 +8,7 @@
 module Main where
 
 import Control.Monad.IO.Class
+import Control.Applicative
 import Data.List (sortOn)
 import qualified Data.Map          as M
 import qualified Data.Text         as T

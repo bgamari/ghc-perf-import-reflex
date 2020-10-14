@@ -49,7 +49,7 @@ instance FromJSON Result where
            <*> o .: "result_value"
 
 rootUrl :: Text
-rootUrl = "http://home.smart-cactus.org:8889"
+rootUrl = "http://perf.ghc.haskell.org:8889"
 
 getCommitResults :: (Reflex t, C t m)
                  => Event t (CommitSha, TestEnv)
